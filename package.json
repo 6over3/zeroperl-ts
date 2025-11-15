@@ -1,6 +1,6 @@
 {
   "name": "@6over3/zeroperl-ts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Perl 5 interpreter powered by WebAssembly for JavaScript runtimes",
   "scripts": {
     "build": "npm run build:esm && npm run build:cjs && bun build.ts",
