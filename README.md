@@ -1,6 +1,6 @@
 # zeroperl-ts
 
-Perl 5 compiled to WebAssembly. Run Perl scripts in JavaScript environments without installing Perl.
+Perl 5 compiled to WebAssembly. Run Perl scripts in the browser or other JavaScript environments without installing Perl.
 
 Built on [zeroperl](https://github.com/6over3/zeroperl).
 
@@ -23,15 +23,10 @@ npm install @6over3/zeroperl-ts
 bun add @6over3/zeroperl-ts
 ```
 
-For browser usage with bundlers, import the WASM file explicitly:
-
-```typescript
-import zeroperl from '@6over3/zeroperl-ts/zeroperl.wasm';
-```
-
-Or download it directly to avoid CORS issues:
+Or, for [Browser Usage](#browser-usage), copy the zeroperl WASM binary to your local website (to avoid CORS errors).
 
 ```bash
+# The -L option allows the CDN to redirect to the latest version
 curl -L -O https://esm.sh/@6over3/zeroperl-ts/zeroperl.wasm
 ```
 
