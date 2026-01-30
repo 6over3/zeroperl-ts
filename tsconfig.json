@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["DOM", "ESNext"],
+    "lib": ["DOM", "WebWorker", "ESNext"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
