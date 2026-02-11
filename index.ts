@@ -855,6 +855,30 @@ export class ZeroPerl {
         const wasi = new WASI(wasiOptions);
         const perl = new ZeroPerl(wasi);
 
+        // Register default web APIs
+        const fetchFn = options.fetch || (globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined);
+
+        // ID 1001: fetch
+        perl.hostFunctions.set(1001, async (urlVal, optionsVal) => {
+            if (!fetchFn) throw new Error("fetch API not available");
+            const url = urlVal.toString();
+            const options = optionsVal ? optionsVal.project() as RequestInit : undefined;
+            
+            const response = await fetchFn(url, options);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const text = await response.text();
+            return perl.createString(text);
+        });
+
+        // ID 1002: sleep
+        perl.hostFunctions.set(1002, async (msVal) => {
+            const ms = msVal.toInt();
+            await new Promise((resolve) => setTimeout(resolve, ms));
+            return perl.createUndef();
+        });
+
         const hostCallFunction = async (
             funcId: number, argc: number, argvPtr: number,
         ): Promise<number> => perl.handleHostCall(funcId, argc, argvPtr);
