@@ -313,13 +313,15 @@ function mapContext(context: PerlContext): number {
  */
 export class PerlValue {
     private ptr: number;
+    private perl: ZeroPerl;
     private exports: ZeroPerlExports;
     private disposed = false;
 
     /** @internal */
-    constructor(ptr: number, exports: ZeroPerlExports) {
+    constructor(ptr: number, exports: ZeroPerlExports, perl: ZeroPerl) {
         this.ptr = ptr;
         this.exports = exports;
+        this.perl = perl;
     }
 
     /** @internal */
@@ -339,7 +341,7 @@ export class PerlValue {
             if (!this.exports.zeroperl_to_int(this.ptr, outPtr)) {
                 throw new ZeroPerlError("Failed to convert value to int");
             }
-            return new DataView(this.exports.memory.buffer).getInt32(outPtr, true);
+            return this.perl.getMemoryView().getInt32(outPtr, true);
         } finally {
             this.exports.free(outPtr);
         }
@@ -356,7 +358,7 @@ export class PerlValue {
             if (!this.exports.zeroperl_to_double(this.ptr, outPtr)) {
                 throw new ZeroPerlError("Failed to convert value to double");
             }
-            return new DataView(this.exports.memory.buffer).getFloat64(outPtr, true);
+            return this.perl.getMemoryView().getFloat64(outPtr, true);
         } finally {
             this.exports.free(outPtr);
         }
@@ -369,8 +371,8 @@ export class PerlValue {
         try {
             const strPtr = this.exports.zeroperl_to_string(this.ptr, lenPtr);
             if (strPtr === 0) return "";
-            const len = new DataView(this.exports.memory.buffer).getUint32(lenPtr, true);
-            return textDecoder.decode(new Uint8Array(this.exports.memory.buffer, strPtr, len));
+            const len = this.perl.getMemoryView().getUint32(lenPtr, true);
+            return textDecoder.decode(this.perl.getUint8Memory().subarray(strPtr, strPtr + len));
         } finally {
             this.exports.free(lenPtr);
         }
@@ -410,7 +412,7 @@ export class PerlValue {
      * - true/false → boolean
      * - Other types → string representation
      */
-    project(): JSPrimitive {
+    project(): any {
         this.checkDisposed();
         if (this.isUndef()) return null;
         const type = this.getType();
@@ -420,6 +422,19 @@ export class PerlValue {
             case "int":
             case "double": return this.toDouble();
             case "string": return this.toString();
+            case "ref": return this.deref().project();
+            case "array": {
+                const arr = PerlArray.fromValue(this, this.perl);
+                const result = arr?.project();
+                arr?.dispose();
+                return result;
+            }
+            case "hash": {
+                const hash = PerlHash.fromValue(this, this.perl);
+                const result = hash?.project();
+                hash?.dispose();
+                return result;
+            }
             default: return this.toString();
         }
     }
@@ -432,7 +447,7 @@ export class PerlValue {
         this.checkDisposed();
         const refPtr = this.exports.zeroperl_new_ref(this.ptr);
         if (refPtr === 0) throw new ZeroPerlError("Failed to create reference");
-        return new PerlValue(refPtr, this.exports);
+        return new PerlValue(refPtr, this.exports, this.perl);
     }
 
     /**
@@ -443,7 +458,7 @@ export class PerlValue {
         this.checkDisposed();
         const derefPtr = this.exports.zeroperl_deref(this.ptr);
         if (derefPtr === 0) throw new ZeroPerlError("Failed to dereference value");
-        return new PerlValue(derefPtr, this.exports);
+        return new PerlValue(derefPtr, this.exports, this.perl);
     }
 
     /** Increment the reference count. */
@@ -521,14 +536,14 @@ export class PerlArray {
     pop(): PerlValue | null {
         this.checkDisposed();
         const valPtr = this.exports.zeroperl_array_pop(this.ptr);
-        return valPtr === 0 ? null : new PerlValue(valPtr, this.exports);
+        return valPtr === 0 ? null : new PerlValue(valPtr, this.exports, this.perl);
     }
 
     /** Get a value at the specified index. Returns null if out of bounds. */
     get(index: number): PerlValue | null {
         this.checkDisposed();
         const valPtr = this.exports.zeroperl_array_get(this.ptr, index);
-        return valPtr === 0 ? null : new PerlValue(valPtr, this.exports);
+        return valPtr === 0 ? null : new PerlValue(valPtr, this.exports, this.perl);
     }
 
     /**
@@ -567,7 +582,7 @@ export class PerlArray {
         this.checkDisposed();
         const valPtr = this.exports.zeroperl_array_to_value(this.ptr);
         if (valPtr === 0) throw new ZeroPerlError("Failed to convert array to value");
-        return new PerlValue(valPtr, this.exports);
+        return new PerlValue(valPtr, this.exports, this.perl);
     }
 
     /** Convert this Perl array to a JavaScript array of primitives. */
@@ -674,7 +689,7 @@ export class PerlHash {
         const keyPtr = this.writeCString(key);
         try {
             const valPtr = this.exports.zeroperl_hash_get(this.ptr, keyPtr);
-            return valPtr === 0 ? null : new PerlValue(valPtr, this.exports);
+            return valPtr === 0 ? null : new PerlValue(valPtr, this.exports, this.perl);
         } finally {
             this.exports.free(keyPtr);
         }
@@ -716,7 +731,7 @@ export class PerlHash {
         this.checkDisposed();
         const valPtr = this.exports.zeroperl_hash_to_value(this.ptr);
         if (valPtr === 0) throw new ZeroPerlError("Failed to convert hash to value");
-        return new PerlValue(valPtr, this.exports);
+        return new PerlValue(valPtr, this.exports, this.perl);
     }
 
     /** Convert this Perl hash to a JavaScript object. */
@@ -748,10 +763,10 @@ export class PerlHash {
 
         try {
             while (this.exports.zeroperl_hash_iter_next(iterPtr, keyOutPtr, valOutPtr)) {
-                const view = new DataView(this.exports.memory.buffer);
+                const view = this.perl.getMemoryView();
                 const keyPtr = view.getUint32(keyOutPtr, true);
                 const valPtr = view.getUint32(valOutPtr, true);
-                yield [this.readCString(keyPtr), new PerlValue(valPtr, this.exports)];
+                yield [this.readCString(keyPtr), new PerlValue(valPtr, this.exports, this.perl)];
             }
         } finally {
             this.exports.free(keyOutPtr);
@@ -783,13 +798,13 @@ export class PerlHash {
     private writeCString(str: string): number {
         const bytes = textEncoder.encode(`${str}\0`);
         const ptr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, ptr);
+        this.perl.getUint8Memory().set(bytes, ptr);
         return ptr;
     }
 
     private readCString(ptr: number): string {
         if (ptr === 0) return "";
-        const view = new Uint8Array(this.exports.memory.buffer);
+        const view = this.perl.getUint8Memory();
         let len = 0;
         while (view[ptr + len] !== 0) len++;
         return textDecoder.decode(view.subarray(ptr, ptr + len));
@@ -819,6 +834,24 @@ export class ZeroPerl {
     private isDisposed = false;
     private hostFunctions: Map<number, HostFunction> = new Map();
     private nextFuncId = 1;
+    private memoryView: DataView | null = null;
+    private uint8View: Uint8Array | null = null;
+
+    /** @internal */
+    getMemoryView(): DataView {
+        if (!this.memoryView || this.memoryView.buffer !== this.exports.memory.buffer) {
+            this.memoryView = new DataView(this.exports.memory.buffer);
+        }
+        return this.memoryView;
+    }
+
+    /** @internal */
+    getUint8Memory(): Uint8Array {
+        if (!this.uint8View || this.uint8View.buffer !== this.exports.memory.buffer) {
+            this.uint8View = new Uint8Array(this.exports.memory.buffer);
+        }
+        return this.uint8View;
+    }
 
 
     private constructor(wasi: WASI) {
@@ -855,6 +888,30 @@ export class ZeroPerl {
         const wasi = new WASI(wasiOptions);
         const perl = new ZeroPerl(wasi);
 
+        // Register default web APIs
+        const fetchFn = options.fetch || (globalThis.fetch ? globalThis.fetch.bind(globalThis) : undefined);
+
+        // ID 1001: fetch
+        perl.hostFunctions.set(1001, async (urlVal, optionsVal) => {
+            if (!fetchFn) throw new Error("fetch API not available");
+            const url = urlVal.toString();
+            const options = optionsVal ? optionsVal.project() as RequestInit : undefined;
+
+            const response = await fetchFn(url, options);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const text = await response.text();
+            return perl.createString(text);
+        });
+
+        // ID 1002: sleep
+        perl.hostFunctions.set(1002, async (msVal) => {
+            const ms = msVal.toInt();
+            await new Promise((resolve) => setTimeout(resolve, ms));
+            return perl.createUndef();
+        });
+
         const hostCallFunction = async (
             funcId: number, argc: number, argvPtr: number,
         ): Promise<number> => perl.handleHostCall(funcId, argc, argvPtr);
@@ -888,11 +945,11 @@ export class ZeroPerl {
 
             const args: PerlValue[] = [];
             if (argc > 0) {
-                const view = new DataView(this.exports.memory.buffer);
+                const view = this.getMemoryView();
                 for (let i = 0; i < argc; i++) {
                     const valPtr = view.getUint32(argvPtr + i * 4, true);
                     if (valPtr !== 0) {
-                        args.push(new PerlValue(valPtr, this.exports));
+                        args.push(new PerlValue(valPtr, this.exports, this));
                     }
                 }
             }
@@ -929,7 +986,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const ptr = this.exports.zeroperl_new_int(Math.floor(value));
         if (ptr === 0) throw new ZeroPerlError("Failed to create integer value");
-        return new PerlValue(ptr, this.exports);
+        return new PerlValue(ptr, this.exports, this);
     }
 
     /**
@@ -940,7 +997,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const ptr = this.exports.zeroperl_new_uint(Math.floor(Math.abs(value)));
         if (ptr === 0) throw new ZeroPerlError("Failed to create unsigned integer value");
-        return new PerlValue(ptr, this.exports);
+        return new PerlValue(ptr, this.exports, this);
     }
 
     /**
@@ -951,7 +1008,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const ptr = this.exports.zeroperl_new_double(value);
         if (ptr === 0) throw new ZeroPerlError("Failed to create double value");
-        return new PerlValue(ptr, this.exports);
+        return new PerlValue(ptr, this.exports, this);
     }
 
     /**
@@ -962,12 +1019,12 @@ export class ZeroPerl {
         this.checkDisposed();
         const bytes = textEncoder.encode(value);
         const strPtr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, strPtr);
+        this.getUint8Memory().set(bytes, strPtr);
 
         try {
             const valPtr = this.exports.zeroperl_new_string(strPtr, bytes.length);
             if (valPtr === 0) throw new ZeroPerlError("Failed to create string value");
-            return new PerlValue(valPtr, this.exports);
+            return new PerlValue(valPtr, this.exports, this);
         } finally {
             this.exports.free(strPtr);
         }
@@ -981,7 +1038,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const ptr = this.exports.zeroperl_new_bool(value ? 1 : 0);
         if (ptr === 0) throw new ZeroPerlError("Failed to create boolean value");
-        return new PerlValue(ptr, this.exports);
+        return new PerlValue(ptr, this.exports, this);
     }
 
     /**
@@ -992,7 +1049,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const ptr = this.exports.zeroperl_new_undef();
         if (ptr === 0) throw new ZeroPerlError("Failed to create undef value");
-        return new PerlValue(ptr, this.exports);
+        return new PerlValue(ptr, this.exports, this);
     }
 
     /**
@@ -1071,7 +1128,7 @@ export class ZeroPerl {
         const namePtr = this.writeCString(name);
         try {
             const valPtr = this.exports.zeroperl_get_var(namePtr);
-            return valPtr === 0 ? null : new PerlValue(valPtr, this.exports);
+            return valPtr === 0 ? null : new PerlValue(valPtr, this.exports, this);
         } finally {
             this.exports.free(namePtr);
         }
@@ -1193,7 +1250,7 @@ export class ZeroPerl {
 
         if (args.length > 0) {
             argvPtr = this.exports.malloc(args.length * 4);
-            const view = new DataView(this.exports.memory.buffer);
+            const view = this.getMemoryView();
             for (let i = 0; i < args.length; i++) {
                 const arg = args[i];
                 if (!arg) throw new ZeroPerlError(`Argument at index ${i} is undefined`);
@@ -1216,7 +1273,7 @@ export class ZeroPerl {
             const results: PerlValue[] = [];
             for (let i = 0; i < count; i++) {
                 const valPtr = this.exports.zeroperl_result_get(resultPtr, i);
-                if (valPtr !== 0) results.push(new PerlValue(valPtr, this.exports));
+                if (valPtr !== 0) results.push(new PerlValue(valPtr, this.exports, this));
             }
 
             const valuesArrayPtr = view.getUint32(resultPtr + 4, true);
@@ -1388,13 +1445,13 @@ export class ZeroPerl {
         }
         const bytes = textEncoder.encode(`${str}\0`);
         const ptr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, ptr);
+        this.getUint8Memory().set(bytes, ptr);
         return ptr;
     }
 
     private readCString(ptr: number): string {
         if (ptr === 0) return "";
-        const view = new Uint8Array(this.exports.memory.buffer);
+        const view = this.getUint8Memory();
         let len = 0;
         while (view[ptr + len] !== 0) len++;
         return textDecoder.decode(view.subarray(ptr, ptr + len));
@@ -1403,7 +1460,7 @@ export class ZeroPerl {
     private writeStringArray(args: string[]): { argv: number; buffers: number[] } {
         const buffers: number[] = [];
         const argv = this.exports.malloc(args.length * 4);
-        const argvView = new DataView(this.exports.memory.buffer);
+        const argvView = this.getMemoryView();
 
         for (let i = 0; i < args.length; i++) {
             const arg = args[i];
