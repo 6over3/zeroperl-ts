@@ -314,6 +314,8 @@ function mapContext(context: PerlContext): number {
 export class PerlValue {
     private ptr: number;
     private perl: ZeroPerl;
+    private exports: ZeroPerlExports;
+    private disposed = false;
 
     /** @internal */
     constructor(ptr: number, exports: ZeroPerlExports, perl: ZeroPerl) {
@@ -339,7 +341,7 @@ export class PerlValue {
             if (!this.exports.zeroperl_to_int(this.ptr, outPtr)) {
                 throw new ZeroPerlError("Failed to convert value to int");
             }
-            return new DataView(this.exports.memory.buffer).getInt32(outPtr, true);
+            return this.perl.getMemoryView().getInt32(outPtr, true);
         } finally {
             this.exports.free(outPtr);
         }
@@ -356,7 +358,7 @@ export class PerlValue {
             if (!this.exports.zeroperl_to_double(this.ptr, outPtr)) {
                 throw new ZeroPerlError("Failed to convert value to double");
             }
-            return new DataView(this.exports.memory.buffer).getFloat64(outPtr, true);
+            return this.perl.getMemoryView().getFloat64(outPtr, true);
         } finally {
             this.exports.free(outPtr);
         }
@@ -369,8 +371,8 @@ export class PerlValue {
         try {
             const strPtr = this.exports.zeroperl_to_string(this.ptr, lenPtr);
             if (strPtr === 0) return "";
-            const len = new DataView(this.exports.memory.buffer).getUint32(lenPtr, true);
-            return textDecoder.decode(new Uint8Array(this.exports.memory.buffer, strPtr, len));
+            const len = this.perl.getMemoryView().getUint32(lenPtr, true);
+            return textDecoder.decode(this.perl.getUint8Memory().subarray(strPtr, strPtr + len));
         } finally {
             this.exports.free(lenPtr);
         }
@@ -761,7 +763,7 @@ export class PerlHash {
 
         try {
             while (this.exports.zeroperl_hash_iter_next(iterPtr, keyOutPtr, valOutPtr)) {
-                const view = new DataView(this.exports.memory.buffer);
+                const view = this.perl.getMemoryView();
                 const keyPtr = view.getUint32(keyOutPtr, true);
                 const valPtr = view.getUint32(valOutPtr, true);
                 yield [this.readCString(keyPtr), new PerlValue(valPtr, this.exports, this.perl)];
@@ -796,13 +798,13 @@ export class PerlHash {
     private writeCString(str: string): number {
         const bytes = textEncoder.encode(`${str}\0`);
         const ptr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, ptr);
+        this.perl.getUint8Memory().set(bytes, ptr);
         return ptr;
     }
 
     private readCString(ptr: number): string {
         if (ptr === 0) return "";
-        const view = new Uint8Array(this.exports.memory.buffer);
+        const view = this.perl.getUint8Memory();
         let len = 0;
         while (view[ptr + len] !== 0) len++;
         return textDecoder.decode(view.subarray(ptr, ptr + len));
@@ -832,6 +834,24 @@ export class ZeroPerl {
     private isDisposed = false;
     private hostFunctions: Map<number, HostFunction> = new Map();
     private nextFuncId = 1;
+    private memoryView: DataView | null = null;
+    private uint8View: Uint8Array | null = null;
+
+    /** @internal */
+    getMemoryView(): DataView {
+        if (!this.memoryView || this.memoryView.buffer !== this.exports.memory.buffer) {
+            this.memoryView = new DataView(this.exports.memory.buffer);
+        }
+        return this.memoryView;
+    }
+
+    /** @internal */
+    getUint8Memory(): Uint8Array {
+        if (!this.uint8View || this.uint8View.buffer !== this.exports.memory.buffer) {
+            this.uint8View = new Uint8Array(this.exports.memory.buffer);
+        }
+        return this.uint8View;
+    }
 
 
     private constructor(wasi: WASI) {
@@ -925,7 +945,7 @@ export class ZeroPerl {
 
             const args: PerlValue[] = [];
             if (argc > 0) {
-                const view = new DataView(this.exports.memory.buffer);
+                const view = this.getMemoryView();
                 for (let i = 0; i < argc; i++) {
                     const valPtr = view.getUint32(argvPtr + i * 4, true);
                     if (valPtr !== 0) {
@@ -999,7 +1019,7 @@ export class ZeroPerl {
         this.checkDisposed();
         const bytes = textEncoder.encode(value);
         const strPtr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, strPtr);
+        this.getUint8Memory().set(bytes, strPtr);
 
         try {
             const valPtr = this.exports.zeroperl_new_string(strPtr, bytes.length);
@@ -1230,7 +1250,7 @@ export class ZeroPerl {
 
         if (args.length > 0) {
             argvPtr = this.exports.malloc(args.length * 4);
-            const view = new DataView(this.exports.memory.buffer);
+            const view = this.getMemoryView();
             for (let i = 0; i < args.length; i++) {
                 const arg = args[i];
                 if (!arg) throw new ZeroPerlError(`Argument at index ${i} is undefined`);
@@ -1425,13 +1445,13 @@ export class ZeroPerl {
         }
         const bytes = textEncoder.encode(`${str}\0`);
         const ptr = this.exports.malloc(bytes.length);
-        new Uint8Array(this.exports.memory.buffer).set(bytes, ptr);
+        this.getUint8Memory().set(bytes, ptr);
         return ptr;
     }
 
     private readCString(ptr: number): string {
         if (ptr === 0) return "";
-        const view = new Uint8Array(this.exports.memory.buffer);
+        const view = this.getUint8Memory();
         let len = 0;
         while (view[ptr + len] !== 0) len++;
         return textDecoder.decode(view.subarray(ptr, ptr + len));
@@ -1440,7 +1460,7 @@ export class ZeroPerl {
     private writeStringArray(args: string[]): { argv: number; buffers: number[] } {
         const buffers: number[] = [];
         const argv = this.exports.malloc(args.length * 4);
-        const argvView = new DataView(this.exports.memory.buffer);
+        const argvView = this.getMemoryView();
 
         for (let i = 0; i < args.length; i++) {
             const arg = args[i];
