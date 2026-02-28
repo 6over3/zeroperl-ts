@@ -261,20 +261,16 @@ async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
         const response = await f(zeroperl);
         moduleData = await response.arrayBuffer();
     } else {
-        const wasmUrl = new URL(zeroperl, import.meta.url);
-        const wasmPath = wasmUrl.pathname;
-
-        //@ts-expect-error Deno
-        if (typeof Deno !== "undefined") {
-            //@ts-expect-error Deno
-            moduleData = (await Deno.readFile(wasmPath)).buffer;
-        } else if (typeof Bun !== "undefined") {
-            const file = Bun.file(wasmPath);
-            moduleData = await file.arrayBuffer();
-        } else {
-            const { readFile } = await import("node:fs/promises");
-            moduleData = (await readFile(wasmPath)).buffer;
+        const { fileURLToPath } = await import("node:url");
+        const { readFile } = await import("node:fs/promises");
+        let wasmPath: string;
+        try {
+            wasmPath = fileURLToPath(new URL(zeroperl, import.meta.url));
+        } catch {
+            // zeroperl is already an absolute file path (e.g. Bun asset resolution on Windows)
+            wasmPath = zeroperl;
         }
+        moduleData = (await readFile(wasmPath)).buffer;
     }
 
     wasmSourceCache = new WeakRef(moduleData);
