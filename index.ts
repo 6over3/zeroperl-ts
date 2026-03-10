@@ -244,10 +244,6 @@ const textEncoder = new TextEncoder();
 
 let wasmSourceCache: WeakRef<ArrayBuffer> | null = null;
 
-function isBrowser(): boolean {
-    return typeof window !== "undefined" && typeof document !== "undefined";
-}
-
 async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
     if (wasmSourceCache) {
         const cached = wasmSourceCache.deref();
@@ -256,7 +252,7 @@ async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
 
     let moduleData: ArrayBuffer;
 
-    if (isBrowser()) {
+    if (typeof window !== "undefined" && typeof document !== "undefined") {
         const f = fetchFn ?? fetch;
         const response = await f(zeroperl);
         moduleData = await response.arrayBuffer();
