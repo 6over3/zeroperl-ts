@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { MemoryFileSystem, ZeroPerl } from "./index";
+import { readFile } from "node:fs/promises";
+import { getPerlVersion, MemoryFileSystem, ZeroPerl } from "./index";
 
 function expectSuccess(result: { success: boolean; error?: string; exitCode: number }) {
 	if (!result.success) {
@@ -12,6 +13,8 @@ function expectFailure(result: { success: boolean; error?: string; exitCode: num
 		throw new Error(`Expected Perl to fail but it succeeded`);
 	}
 }
+
+const BUNDLED_PERL_VERSION = "v5.42.0";
 
 describe("Basic Operations", () => {
 	it("should create and dispose ZeroPerl instance", async () => {
@@ -2544,5 +2547,43 @@ describe("Time::HiRes", () => {
 		expect(output).toContain(".");
 
 		perl.dispose();
+	});
+});
+
+describe("Custom fetch in Node.js", () => {
+	it("should call custom fetch instead of loading bundled WASM", async () => {
+		let fetchCalled = false;
+		const customFetch = async () => {
+			fetchCalled = true;
+			const wasm = await readFile("./zeroperl.wasm");
+			return new Response(wasm, { headers: { "content-type": "application/wasm" } });
+		};
+
+		const perl = await ZeroPerl.create({ fetch: customFetch });
+		expect(fetchCalled).toBe(true);
+		expect(perl.isInitialized()).toBe(true);
+		perl.dispose();
+	});
+});
+
+describe("getPerlVersion", () => {
+	it("should return the bundled Perl version", async () => {
+		const version = await getPerlVersion();
+		expect(version).toBe(BUNDLED_PERL_VERSION);
+	});
+});
+
+describe("getPerlVersion with custom fetch", () => {
+	it("should call custom fetch and return version", async () => {
+		let fetchCalled = false;
+		const customFetch = async () => {
+			fetchCalled = true;
+			const wasm = await readFile("./zeroperl.wasm");
+			return new Response(wasm, { headers: { "content-type": "application/wasm" } });
+		};
+
+		const version = await getPerlVersion({ fetch: customFetch });
+		expect(fetchCalled).toBe(true);
+		expect(version).toBe(BUNDLED_PERL_VERSION);
 	});
 });

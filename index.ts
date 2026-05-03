@@ -249,16 +249,20 @@ function isBrowser(): boolean {
 }
 
 async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
-    if (wasmSourceCache) {
+    // Cache only applies to bundled WASM (no custom fetch)
+    if (!fetchFn && wasmSourceCache) {
         const cached = wasmSourceCache.deref();
         if (cached) return cached;
     }
 
     let moduleData: ArrayBuffer;
 
-    if (isBrowser()) {
-        const f = fetchFn ?? fetch;
-        const response = await f(zeroperl);
+    if (fetchFn) {
+        // Custom fetch takes precedence in ALL environments
+        const response = await fetchFn(zeroperl);
+        moduleData = await response.arrayBuffer();
+    } else if (isBrowser()) {
+        const response = await fetch(zeroperl);
         moduleData = await response.arrayBuffer();
     } else {
         const wasmUrl = new URL(zeroperl, import.meta.url);
@@ -269,15 +273,17 @@ async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
             //@ts-expect-error Deno
             moduleData = (await Deno.readFile(wasmPath)).buffer;
         } else if (typeof Bun !== "undefined") {
-            const file = Bun.file(wasmPath);
-            moduleData = await file.arrayBuffer();
+            moduleData = await Bun.file(wasmPath).arrayBuffer();
         } else {
             const { readFile } = await import("node:fs/promises");
             moduleData = (await readFile(wasmPath)).buffer;
         }
     }
 
-    wasmSourceCache = new WeakRef(moduleData);
+    // Only cache bundled WASM loads
+    if (!fetchFn) {
+        wasmSourceCache = new WeakRef(moduleData);
+    }
     return moduleData;
 }
 
@@ -1424,4 +1430,23 @@ export class ZeroPerl {
     private checkDisposed(): void {
         if (this.isDisposed) throw new ZeroPerlError("ZeroPerl instance has been disposed");
     }
+}
+
+export async function getPerlVersion(options?: ZeroPerlOptions): Promise<string> {
+    let captured = "";
+    const perl = await ZeroPerl.create({
+        ...options,
+        stdout: (chunk) => {
+            const text = typeof chunk === "string" ? chunk : textDecoder.decode(chunk);
+            captured += text;
+            options?.stdout?.(chunk);
+        },
+    });
+
+    await perl.eval("print $^V");
+    perl.flush();
+
+    const version = captured.trim();
+    perl.dispose();
+    return version;
 }
