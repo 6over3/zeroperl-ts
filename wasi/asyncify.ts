@@ -65,8 +65,13 @@ function isPromise(obj: unknown): obj is Promise<unknown> {
 
 function proxyGet<T extends object>(obj: T, transform: (value: unknown) => unknown): T {
 	return new Proxy(obj, {
-		get: (obj, name: string | symbol) =>
-			transform(obj[name as keyof typeof obj]),
+		get: (obj, name: string | symbol) => {
+			const value = obj[name as keyof typeof obj];
+			if (value !== undefined) {
+				return transform(value);
+			}
+			return undefined;
+		},
 	});
 }
 
