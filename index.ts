@@ -245,7 +245,8 @@ const textEncoder = new TextEncoder();
 let wasmSourceCache: WeakRef<ArrayBuffer> | null = null;
 
 function isBrowser(): boolean {
-    return typeof window !== "undefined" && typeof document !== "undefined";
+    return (typeof window !== "undefined" && typeof document !== "undefined") ||
+        (typeof self !== "undefined" && typeof (self as any).importScripts !== "undefined");
 }
 
 async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
@@ -257,8 +258,9 @@ async function loadWasmSource(fetchFn?: FetchLike): Promise<ArrayBuffer> {
     let moduleData: ArrayBuffer;
 
     if (isBrowser()) {
+        const wasmUrl = new URL(zeroperl, import.meta.url).href;
         const f = fetchFn ?? fetch;
-        const response = await f(zeroperl);
+        const response = await f(wasmUrl);
         moduleData = await response.arrayBuffer();
     } else {
         const wasmUrl = new URL(zeroperl, import.meta.url);
